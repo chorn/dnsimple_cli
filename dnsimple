@@ -1,0 +1,209 @@
+#!/bin/bash
+
+# License: See LICENSE
+
+declare _api
+_api="https://api.dnsimple.com/v2"
+
+declare _config
+_config=$(mktemp -t dnsimple)
+declare _json_data
+_json_data=$(mktemp -t dnsimple_json)
+declare _jq_args
+
+cleanup() {
+  local _exit_code="$1"
+  [[ -n "$_exit_code" ]] || _exit_code=0
+
+  if [[ "$_exit_code" -ne 0 ]] ; then
+    [[ -n "$_config"    && -e "$_config" ]]    && cat "$_config"
+    [[ -n "$_json_data" && -e "$_json_data" ]] && cat "$_json_data"
+  fi
+
+  [[ -n "$_config"    && -e "$_config" ]]    && rm "$_config"
+  [[ -n "$_json_data" && -e "$_json_data" ]] && rm "$_json_data"
+
+  exit "$_exit_code"
+}
+
+usage() {
+  cat <<USAGE
+Usage: ${0##*/} <command> [options] [command specific options]
+  OPTIONS:
+  -h, --help            This.
+
+  --dat,                Specify a \$DNSIMPLE_ACCOUNT_TOKEN, in lieu of or to
+  --account-token       override the setting from your environment.
+                        You can create 'User access token' on your dnsimple.com
+                        User Settings page.
+
+  --dai,                Specify a \$DNSIMPLE_ACCOUNT_ID to override the
+  --account-id          wildcard of '_' or to override the setting from your
+                        environment. Specifying "auto" will use the API to
+                        figure out what the account id really is. Some
+                        commands do not support the wildcard.
+
+  --api                 Override the default v2 API URL. The default is:
+                        $_api
+
+  COMMANDS:
+    whoami              Prints info for your \$DNSIMPLE_ACCOUNT_TOKEN.
+
+    zones               Prints available zones, requires a real
+                        \$DNSIMPLE_ACCOUNT_ID.
+
+    zone_info           Prints info for a specific zone.
+      -z, --zone <zone name>
+
+    zone_records        Prints records for a specific zone.
+      -z, --zone <zone name>
+
+    zone_record         Prints info for a specific zone record.
+      -z, --zone <zone name>
+      -r, --record <record name>
+
+    zone_record_id      Prints the id for a specific zone record.
+      -z, --zone <zone name>
+      -r, --record <record name>
+
+  You need to have 'dig', 'curl', and 'jq' installed and in your \$PATH.
+  https://curl.haxx.se/
+  https://stedolan.github.io/jq/
+
+USAGE
+  cleanup 1
+}
+
+[[ $# -eq 0 ]] && usage
+command -v curl >/dev/null 2>/dev/null || usage
+command -v jq >/dev/null 2>/dev/null || usage
+
+declare _command
+_command="$1" ; shift
+
+declare _zone
+declare _record
+declare _ip
+
+while [[ $# -gt 1 ]] ; do
+  curr_arg="$1" ; shift
+  if [[ $# -gt 0 ]] ; then next_arg="$1" ; shift ; else next_arg="" ; fi
+  case "$curr_arg" in
+    -h|--help|help) usage ;;
+    --api) _api=$next_arg ;;
+    --dat|--account-token) DNSIMPLE_ACCOUNT_TOKEN=$next_arg ;;
+    --dai|--account-id) DNSIMPLE_ACCOUNT_ID=$next_arg ;;
+    -z|--zone) _zone=$next_arg ;;
+    -r|--record) _record=$next_arg ;;
+    -i|--ip) _ip=$next_arg ;;
+  esac
+done
+
+[[ -n "$DNSIMPLE_ACCOUNT_TOKEN" ]] || usage
+
+dnsimple_api() {
+  local _resource="$1"
+  local _method="$2"
+
+  local -a _args=(
+                  [1]="silent"
+                  [2]="header = \"Authorization: Bearer ${DNSIMPLE_ACCOUNT_TOKEN}\""
+                  [3]="header = \"Accept: application/json\""
+                  )
+
+  [[ -n "$_method" ]]    && _args+=([10]="header = \"Content-Type: application/json\"" [11]="request = \"${_method}\"")
+  [[ -s "$_json_data" ]] && _args+=([20]="data = \"@${_json_data}\"")
+
+  _args+=([30]="url = \"${_api}/${_resource}\"")
+
+  $(IFS=$'\n' ; echo "${_args[*]}" > "$_config")
+
+  # cp "$_config" debug
+  curl --config "$_config"
+}
+
+if [[ -n "$DNSIMPLE_ACCOUNT_ID" && "$DNSIMPLE_ACCOUNT_ID" == "auto" ]] ; then
+  DNSIMPLE_ACCOUNT_ID=$(dnsimple_api "whoami" | jq '.data.account.id')
+else
+  DNSIMPLE_ACCOUNT_ID="_"
+fi
+
+if [[ -n "$_ip" && "$_ip" == "auto" ]] ; then
+  command -v dig >/dev/null 2>/dev/null || usage
+
+  _ip=$(dig +short myip.opendns.com @resolver1.opendns.com || curl -f4L http://ifconfig.me/ || curl -f4L http://icanhazip.com/)
+fi
+
+_whoami() {
+  dnsimple_api "whoami" | jq '.'
+}
+
+_zones() {
+  dnsimple_api "${DNSIMPLE_ACCOUNT_ID}/domains" | jq '.'
+}
+
+_zone_info() {
+  [[ -n "$_zone" ]] || usage
+
+  dnsimple_api "${DNSIMPLE_ACCOUNT_ID}/zones/${_zone}" | jq '.'
+}
+
+_zone_records() {
+  [[ -n "$_zone" ]] || usage
+
+  dnsimple_api "${DNSIMPLE_ACCOUNT_ID}/zones/${_zone}/records" | jq '.'
+}
+
+_zone_record() {
+  [[ -n "$_zone" ]] || usage
+  [[ -n "$_record" ]] || usage
+
+  dnsimple_api "${DNSIMPLE_ACCOUNT_ID}/zones/${_zone}/records" | jq ".data[] | select(.name == \"${_record}\")"
+}
+
+_zone_record_id() {
+  [[ -n "$_zone" ]] || usage
+  [[ -n "$_record" ]] || usage
+  _zone_record | jq -cMj ".id" ; echo
+}
+
+# declare _zone_record
+# _zone_record=$(get_zone_record)
+#
+# declare _id
+# _id=$(zone_record_id)
+
+
+# send_zone_record() {
+#   local _method="$1"
+#
+#   echo "{\"name\":\"${_record}\",\"type\":\"A\",\"content\":\"${_ip}\"}" > "$_json_data"
+#
+#   dnsimple_api "${DNSIMPLE_ACCOUNT_ID}/zones/${_zone}/records/${_id}" "${_method}" | jq '.'
+#
+#   rm "$_json_data"
+# }
+#
+# if [[ -z "$_id" ]] ; then
+#   send_zone_record POST
+# else
+#   send_zone_record PATCH
+# fi
+#
+# rm "$_config"
+
+
+
+
+case "$_command" in
+  whoami) _whoami ;;
+  zones) _zones ;;
+  zone_info) _zone_info ;;
+  zone_records) _zone_records ;;
+  zone_record) _zone_record ;;
+  zone_record_id) _zone_record_id ;;
+  *) usage ;;
+esac
+
+
+cleanup 0
