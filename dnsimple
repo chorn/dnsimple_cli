@@ -2,30 +2,31 @@
 
 # License: See LICENSE
 
-declare _api
-_api="https://api.dnsimple.com/v2"
+set -e
 
-declare _config
-_config=$(mktemp -t dnsimple)
-declare _json_data
-_json_data=$(mktemp -t dnsimple_json)
+declare _api="https://api.dnsimple.com/v2"
+declare _config=$(mktemp -t dnsimple)
+declare _json_data=$(mktemp -t dnsimple_json)
+declare _debug=$(mktemp -t dnsimple_debug)
+declare _api_out=$(mktemp -t dnsimple_curl)
 declare _jq_args
 
+#-----------------------------------------------------------------------------
 cleanup() {
   local _exit_code="$1"
   [[ -n "$_exit_code" ]] || _exit_code=0
 
-  if [[ "$_exit_code" -ne 0 ]] ; then
-    [[ -n "$_config"    && -e "$_config" ]]    && cat "$_config"
-    [[ -n "$_json_data" && -e "$_json_data" ]] && cat "$_json_data"
-  fi
-
-  [[ -n "$_config"    && -e "$_config" ]]    && rm "$_config"
-  [[ -n "$_json_data" && -e "$_json_data" ]] && rm "$_json_data"
+  for f in "$_config" "$_json_data" "$_api_out" "$_debug" ; do
+    if [[ -f "$f" ]] ; then
+      [[ "$_exit_code" -ne 0 ]] && cat "$f"
+      rm "$f"
+    fi
+  done
 
   exit "$_exit_code"
 }
 
+#-----------------------------------------------------------------------------
 usage() {
   cat <<USAGE
 Usage: ${0##*/} <command> [options] [command specific options]
@@ -66,6 +67,14 @@ Usage: ${0##*/} <command> [options] [command specific options]
       -z, --zone <zone name>
       -r, --record <record name>
 
+    update_a_record     Creates/Updates the zone record with an IP address.
+                        Specifying an IP address of "auto" will detect and use
+                        the current public internet IP.
+
+      -z, --zone <zone name>
+      -r, --record <record name>
+      -i, --ip <IP or "auto">
+
   You need to have 'dig', 'curl', and 'jq' installed and in your \$PATH.
   https://curl.haxx.se/
   https://stedolan.github.io/jq/
@@ -74,13 +83,113 @@ USAGE
   cleanup 1
 }
 
+#-----------------------------------------------------------------------------
+# API
+typeset -t dnsimple_api
+dnsimple_api() {
+  local _resource="$1"
+  local _method="$2"
+
+  local -a _args=(
+                  [1]="silent"
+                  [2]="header = \"Authorization: Bearer ${DNSIMPLE_ACCOUNT_TOKEN}\""
+                  [3]="header = \"Accept: application/json\""
+                  )
+
+  [[ -n "$_method" ]]    && _args+=([10]="header = \"Content-Type: application/json\"" [11]="request = \"${_method}\"")
+  [[ -s "$_json_data" ]] && _args+=([20]="data = \"@${_json_data}\"")
+
+  _args+=([30]="url = \"${_api}/${_resource}\"")
+
+  $(IFS=$'\n' ; echo "${_args[*]}" > "$_config")
+
+  curl --config "$_config" --output "$_api_out" >& "$_debug"
+}
+
+#-----------------------------------------------------------------------------
+_whoami() {
+  dnsimple_api "whoami" && jq '.' < "$_api_out"
+}
+
+#-----------------------------------------------------------------------------
+_zones() {
+  local _dai="$1"
+  [[ -n "$_dai" ]] || usage
+
+  dnsimple_api "${_dai}/domains" && jq '.' < "$_api_out"
+}
+
+#-----------------------------------------------------------------------------
+_zone_info() {
+  local _dai="$1"
+  local _zone="$2"
+  [[ -n "$_dai" && -n "$_zone" ]] || usage
+
+  dnsimple_api "${_dai}/zones/${_zone}" && jq '.' < "$_api_out"
+}
+
+#-----------------------------------------------------------------------------
+_zone_records() {
+  local _dai="$1"
+  local _zone="$2"
+  [[ -n "$_dai" && -n "$_zone" ]] || usage
+
+  dnsimple_api "${_dai}/zones/${_zone}/records" && jq '.' < "$_api_out"
+}
+
+#-----------------------------------------------------------------------------
+_zone_record() {
+  local _dai="$1"
+  local _zone="$2"
+  local _record="$3"
+  [[ -n "$_dai" && -n "$_zone" && -n "$_record" ]] || usage
+
+  dnsimple_api "${_dai}/zones/${_zone}/records" && jq ".data[] | select(.name == \"${_record}\")" < "$_api_out"
+}
+
+#-----------------------------------------------------------------------------
+_zone_record_id() {
+  local _dai="$1"
+  local _zone="$2"
+  local _record="$3"
+  [[ -n "$_dai" && -n "$_zone" && -n "$_record" ]] || usage
+
+  _zone_record "$_dai" "$_zone" "$_record" | jq -cMj ".id" ; echo
+}
+
+#-----------------------------------------------------------------------------
+_update_a_record() {
+  local _dai="$1"
+  local _zone="$2"
+  local _record="$3"
+  local _ip="$4"
+  [[ -n "$_dai" && -n "$_zone" && -n "$_record" && -n "$_ip" ]] || usage
+
+  local _id=$(_zone_record_id "$_dai" "$_zone" "$_record")
+  local _method="POST"
+
+  [[ -n "$_id" ]] && _method="PATCH"
+
+  echo "{\"name\":\"${_record}\",\"type\":\"A\",\"content\":\"${_ip}\"}" > "$_json_data"
+
+  dnsimple_api "${_dai}/zones/${_zone}/records/${_id}" "${_method}" && jq '.' < "$_api_out"
+}
+
+#-----------------------------------------------------------------------------
+# Main program
+
+for _signal in 0 1 ; do
+  trap "cleanup $_signal" $_signal
+done
+
 [[ $# -eq 0 ]] && usage
-command -v curl >/dev/null 2>/dev/null || usage
-command -v jq >/dev/null 2>/dev/null || usage
+
+for _cli in curl jq dig ; do
+  command -v "$_cli" >/dev/null 2>/dev/null || usage
+done
 
 declare _command
 _command="$1" ; shift
-
 declare _zone
 declare _record
 declare _ip
@@ -101,109 +210,45 @@ done
 
 [[ -n "$DNSIMPLE_ACCOUNT_TOKEN" ]] || usage
 
-dnsimple_api() {
-  local _resource="$1"
-  local _method="$2"
-
-  local -a _args=(
-                  [1]="silent"
-                  [2]="header = \"Authorization: Bearer ${DNSIMPLE_ACCOUNT_TOKEN}\""
-                  [3]="header = \"Accept: application/json\""
-                  )
-
-  [[ -n "$_method" ]]    && _args+=([10]="header = \"Content-Type: application/json\"" [11]="request = \"${_method}\"")
-  [[ -s "$_json_data" ]] && _args+=([20]="data = \"@${_json_data}\"")
-
-  _args+=([30]="url = \"${_api}/${_resource}\"")
-
-  $(IFS=$'\n' ; echo "${_args[*]}" > "$_config")
-
-  # cp "$_config" debug
-  curl --config "$_config"
-}
-
-if [[ -n "$DNSIMPLE_ACCOUNT_ID" && "$DNSIMPLE_ACCOUNT_ID" == "auto" ]] ; then
-  DNSIMPLE_ACCOUNT_ID=$(dnsimple_api "whoami" | jq '.data.account.id')
-else
-  DNSIMPLE_ACCOUNT_ID="_"
-fi
-
 if [[ -n "$_ip" && "$_ip" == "auto" ]] ; then
-  command -v dig >/dev/null 2>/dev/null || usage
-
   _ip=$(dig +short myip.opendns.com @resolver1.opendns.com || curl -f4L http://ifconfig.me/ || curl -f4L http://icanhazip.com/)
 fi
 
-_whoami() {
-  dnsimple_api "whoami" | jq '.'
-}
-
-_zones() {
-  dnsimple_api "${DNSIMPLE_ACCOUNT_ID}/domains" | jq '.'
-}
-
-_zone_info() {
-  [[ -n "$_zone" ]] || usage
-
-  dnsimple_api "${DNSIMPLE_ACCOUNT_ID}/zones/${_zone}" | jq '.'
-}
-
-_zone_records() {
-  [[ -n "$_zone" ]] || usage
-
-  dnsimple_api "${DNSIMPLE_ACCOUNT_ID}/zones/${_zone}/records" | jq '.'
-}
-
-_zone_record() {
-  [[ -n "$_zone" ]] || usage
-  [[ -n "$_record" ]] || usage
-
-  dnsimple_api "${DNSIMPLE_ACCOUNT_ID}/zones/${_zone}/records" | jq ".data[] | select(.name == \"${_record}\")"
-}
-
-_zone_record_id() {
-  [[ -n "$_zone" ]] || usage
-  [[ -n "$_record" ]] || usage
-  _zone_record | jq -cMj ".id" ; echo
-}
-
-# declare _zone_record
-# _zone_record=$(get_zone_record)
-#
-# declare _id
-# _id=$(zone_record_id)
-
-
-# send_zone_record() {
-#   local _method="$1"
-#
-#   echo "{\"name\":\"${_record}\",\"type\":\"A\",\"content\":\"${_ip}\"}" > "$_json_data"
-#
-#   dnsimple_api "${DNSIMPLE_ACCOUNT_ID}/zones/${_zone}/records/${_id}" "${_method}" | jq '.'
-#
-#   rm "$_json_data"
-# }
-#
-# if [[ -z "$_id" ]] ; then
-#   send_zone_record POST
-# else
-#   send_zone_record PATCH
-# fi
-#
-# rm "$_config"
-
-
-
+if [[ -z "$DNSIMPLE_ACCOUNT_ID" ]] ; then
+  DNSIMPLE_ACCOUNT_ID="_"
+elif [[ -n "$DNSIMPLE_ACCOUNT_ID" && "$DNSIMPLE_ACCOUNT_ID" == "auto" ]] ; then
+  DNSIMPLE_ACCOUNT_ID=$(dnsimple_api "whoami" && jq '.data.account.id' < "$_api_out")
+fi
 
 case "$_command" in
-  whoami) _whoami ;;
-  zones) _zones ;;
-  zone_info) _zone_info ;;
-  zone_records) _zone_records ;;
-  zone_record) _zone_record ;;
-  zone_record_id) _zone_record_id ;;
+  whoami)
+    _whoami
+    ;;
+
+  zones)
+    _zones "$DNSIMPLE_ACCOUNT_ID"
+    ;;
+
+  zone_info)
+    _zone_info "$DNSIMPLE_ACCOUNT_ID" "$_zone"
+    ;;
+
+  zone_records)
+    _zone_records "$DNSIMPLE_ACCOUNT_ID" "$_zone"
+    ;;
+
+  zone_record)
+    _zone_record "$DNSIMPLE_ACCOUNT_ID" "$_zone" "$_record"
+    ;;
+
+  zone_record_id)
+    _zone_record_id "$DNSIMPLE_ACCOUNT_ID" "$_zone" "$_record"
+    ;;
+
+  update_a_record)
+    _update_a_record "$DNSIMPLE_ACCOUNT_ID" "$_zone" "$_record" "$_ip"
+    ;;
+
   *) usage ;;
 esac
 
-
-cleanup 0
