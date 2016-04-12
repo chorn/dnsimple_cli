@@ -4,7 +4,7 @@ A cli for the DNSimple v2 API. This is not a complete API implementation. It sho
 
 ## Install
 
-There is no install, it's just `bash`! Well, that's not true. If you're using `bash` version < 4, you're going to have a bad time.
+There is no install, it's just `bash`! Well, that's not true.
 
 ### Dependencies
 
@@ -13,15 +13,10 @@ There is no install, it's just `bash`! Well, that's not true. If you're using `b
 3. dig
     * Part of OS X
     * On Linux it's usuall the `dnsutils` package
-
-
-### Workarounds for an old Unix:
-
-#### OS X
-[Homebrew](http://brew.sh/)
-
-#### Linux
-[Linux Brew](http://linuxbrew.sh/)
+4. bash version >= 4
+    * For an old version of OS X, use [Homebrew](http://brew.sh/)
+    * For an old version of Linux, use [Linux Brew](http://linuxbrew.sh/)
+    * If you're really stuck with bash v3.something, let me know and I'll take all the love and joy out of the script for you. ;)
 
 ## Setup
 
@@ -142,7 +137,6 @@ $ ./dnsimple update_a_record --zone chorn.net --record derp3 --ip auto
 
 ## Todo
 
-Pagination
-
-
+1. Pagination
+2. Update other record types.
 
