@@ -11,11 +11,9 @@ There is no install, it's just `bash`! Well, that's not true.
 1. [curl](https://curl.haxx.se/)
 2. [jq](https://stedolan.github.io/jq/)
 3. dig
-    * Part of OS X
-    * On Linux it's usuall the `dnsutils` package
+    * Part of macOS
+    * On Linux it's usually the `dnsutils` package
 4. bash version >= 4
-    * For an old version of OS X, use [Homebrew](http://brew.sh/)
-    * For an old version of Linux, use [Linux Brew](http://linuxbrew.sh/)
     * If you're really stuck with bash v3.something, let me know and I'll take all the love and joy out of the script for you. ;)
 
 ## Setup
@@ -38,25 +36,20 @@ Usage: dnsimple <command> [options] [command specific options]
   OPTIONS:
   -h, --help            This.
 
-  --dat,                Specify a $DNSIMPLE_ACCOUNT_TOKEN, in lieu of or to
+  --dat,                Specify a \$DNSIMPLE_ACCOUNT_TOKEN, in lieu of or to
   --account-token       override the setting from your environment.
                         You can create 'User access token' on your dnsimple.com
                         User Settings page.
 
-  --dai,                Specify a $DNSIMPLE_ACCOUNT_ID to override the
-  --account-id          wildcard of '_' or to override the setting from your
-                        environment. Specifying "auto" will use the API to
-                        figure out what the account id really is. Some
-                        commands do not support the wildcard.
-
   --api                 Override the default v2 API URL. The default is:
-                        https://api.dnsimple.com/v2
+                        $_api
+
+  --compact             Don't show the full json output.
 
   COMMANDS:
-    whoami              Prints info for your $DNSIMPLE_ACCOUNT_TOKEN.
+    whoami              Prints info for your \$DNSIMPLE_ACCOUNT_TOKEN.
 
-    zones               Prints available zones, requires a real
-                        $DNSIMPLE_ACCOUNT_ID.
+    zones               Prints available zones.
 
     zone_info           Prints info for a specific zone.
       -z, --zone <zone name>
@@ -75,14 +68,9 @@ Usage: dnsimple <command> [options] [command specific options]
     update_a_record     Creates/Updates the zone record with an IP address.
                         Specifying an IP address of "auto" will detect and use
                         the current public internet IP.
-
       -z, --zone <zone name>
       -r, --record <record name>
       -i, --ip <IP or "auto">
-
-  You need to have 'dig', 'curl', and 'jq' installed and in your $PATH.
-  https://curl.haxx.se/
-  https://stedolan.github.io/jq/
 ```
 
 
@@ -137,6 +125,5 @@ $ ./dnsimple update_a_record --zone chorn.net --record derp3 --ip auto
 
 ## Todo
 
-1. Pagination
-2. Update other record types.
+1. Update other record types.
 
